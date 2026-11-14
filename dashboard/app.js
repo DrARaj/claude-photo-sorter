@@ -715,6 +715,11 @@ async function init() {
   }
   setHeader(); renderPanel();
   requestAnimationFrame(tick);
+  if (!DEMO && params.get("source") && mode !== "running") {  // ?source=...&dest=... fills both folders in, ready to press Start
+    if (mode === "done") newSort();
+    await choose("source", params.get("source"));
+    if (pick.source) await choose("dest", params.get("dest") || pick.source + " (sorted)");
+  }
   if (params.has("auto") && mode === "done") setTimeout(replay, 1200);
 }
 $("go").onclick = sortWithClaude;

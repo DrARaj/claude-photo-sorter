@@ -140,7 +140,10 @@ def sort_all(args):
         save(marker, categories_fingerprint())
         script = "label_jev.py" if labeler == "jev" else "label_claude.py"
         if run_phase("label", [os.path.join(SCRIPTS, script)]):
-            return fail(1)
+            total = len(load(os.path.join(DATA, "inventory.json"), []))
+            if not total or len(live_labels()) < 0.95 * total:
+                return fail(1)
+            job["log"].append(f"A few files could not be labelled; they go to the catch-all folders.")
         if run_phase("apply", [os.path.join(SCRIPTS, "apply.py"), dest]):
             return fail(1)
         job.update(running=False, code=0, phase="done")

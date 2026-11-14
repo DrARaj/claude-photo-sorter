@@ -56,19 +56,35 @@ def run(n, batch):
         "A tag with VIDEO is a video and must get a (video) folder. Every other tile is a photo and must get a "
         "(photo) folder. PNG usually means a screenshot. Give every id you see exactly one folder key from the list.\n\n"
         "Reply with only a JSON object mapping id to folder key, like {\"12\": \"food\", \"13\": \"selfies\"}. No other text.")
-    t0 = time.time()
-    r = subprocess.run([claude, "-p", prompt, "--model", MODEL, "--allowedTools", "Read", "--strict-mcp-config",
-                        "--setting-sources", "project", "--no-session-persistence", "--output-format", "json"],
-                       cwd=WORK, capture_output=True, text=True, timeout=900)
-    try:
-        res = json.loads(r.stdout)
-        text, cost = res.get("result", ""), res.get("total_cost_usd", 0) or 0
-        labels = json.loads(re.search(r"\{.*\}", text, re.S).group(0))
-    except Exception:
-        raise RuntimeError(f"batch {n}: could not read Claude's answer: {(r.stdout or r.stderr)[:300]}")
-    labels = {str(k): v for k, v in labels.items() if str(k) in want}
-    save(out, labels)
-    return n, len(labels), cost, f"{time.time() - t0:.0f}s"
+    t0, why = time.time(), ""
+    for attempt in range(4):  # Claude sometimes answers early (busy, rate limit): wait and ask again
+        if attempt:
+            time.sleep(8 * attempt)
+        try:
+            r = subprocess.run([claude, "-p", prompt, "--model", MODEL, "--allowedTools", "Read", "--strict-mcp-config",
+                                "--setting-sources", "project", "--no-session-persistence", "--output-format", "json"],
+                               cwd=WORK, capture_output=True, text=True, timeout=900)
+        except subprocess.TimeoutExpired:
+            why = "took longer than 15 minutes"
+            continue
+        try:
+            res = json.loads(r.stdout)
+        except ValueError:
+            res = {"result": r.stdout or r.stderr}
+        text = str(res.get("result", ""))
+        m = re.search(r"\{[^{}]*\}", text, re.S)
+        try:
+            labels = {str(k): v for k, v in json.loads(m.group(0)).items() if str(k) in want} if m else {}
+        except ValueError:
+            labels = {}
+        if len(labels) >= 0.9 * len(want):
+            save(out, labels)
+            return n, len(labels), res.get("total_cost_usd", 0) or 0, f"{time.time() - t0:.0f}s" + (f", try {attempt + 1}" if attempt else "")
+        why = " ".join(text.split())[:160] or (r.stderr or "").strip()[:160] or "empty answer"
+        with open(os.path.join(WORK, f"claude_failed_{n:02d}.txt"), "w") as f:  # keep the raw answer for debugging
+            f.write(r.stdout or r.stderr or "")
+        print(f"  batch {n + 1}: try {attempt + 1} gave no usable labels ({why}), retrying", flush=True)
+    raise RuntimeError(f"batch {n + 1} failed after 4 tries: {why}")
 
 
 print(f"Claude is labelling {len(inv)} files in {len(batches)} batches ({WORKERS} at a time, model {MODEL})...", flush=True)
